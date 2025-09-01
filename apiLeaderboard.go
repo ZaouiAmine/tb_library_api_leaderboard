@@ -2,7 +2,7 @@ package lib
 
 import (
 	"encoding/json"
-	"fmt"
+
 	"sort"
 	"strconv"
 	"strings"
@@ -51,115 +51,32 @@ type GameStateReq struct {
 
 // Compute score from the player's final block count
 func computeScore(req GameStateReq) int {
-	// Anti-cheat validation using timestamps and event analysis
-	if len(req.GameEvents) == 0 {
-		return 0 // No events = no score
-	}
+	// Simple timestamp verification anti-cheat
+	if len(req.GameEvents) > 0 {
+		// Sort events by timestamp
+		sortedEvents := make([]GameEvent, len(req.GameEvents))
+		copy(sortedEvents, req.GameEvents)
+		sort.Slice(sortedEvents, func(i, j int) bool {
+			return sortedEvents[i].Timestamp < sortedEvents[j].Timestamp
+		})
 
-	// Sort events by timestamp to ensure chronological order
-	sortedEvents := make([]GameEvent, len(req.GameEvents))
-	copy(sortedEvents, req.GameEvents)
-	sort.Slice(sortedEvents, func(i, j int) bool {
-		return sortedEvents[i].Timestamp < sortedEvents[j].Timestamp
-	})
-
-	var lastTimestamp int64 = -1
-	blockCount := 0
-	var lastBlockPosition Vec3
-
-	// Anti-cheat constants
-	const (
-		maxBlocksPerSecond = 3.0           // Maximum blocks per second
-		maxBlockDistance   = 15.0          // Maximum distance between blocks
-		minTimeBetweenEvents = 50          // Minimum 50ms between events
-		maxGameDuration    = 3600000       // Maximum 1 hour game duration
-		minGameDuration    = 1000          // Minimum 1 second game duration
-	)
-
-	for i, ev := range sortedEvents {
-		// Validate timestamp progression
-		if lastTimestamp >= 0 {
-			timeDiff := ev.Timestamp - lastTimestamp
-			if timeDiff < minTimeBetweenEvents {
-				// Events too close together - suspicious, reduce score
-				blockCount = int(float64(blockCount) * 0.5)
-				break
+		// Check if timestamps are in order and reasonable
+		var lastTimestamp int64 = -1
+		for _, ev := range sortedEvents {
+			if lastTimestamp >= 0 && ev.Timestamp <= lastTimestamp {
+				// Timestamps not in order - suspicious
+				return 0
 			}
-		}
-		lastTimestamp = ev.Timestamp
-
-		// Count block placement events
-		if ev.EventType == "block_placed" {
-			blockCount++
-			
-			// Validate block positions (if not first block)
-			if blockCount > 1 {
-				// Calculate 3D distance between blocks
-				dx := ev.BlockPosition.X - lastBlockPosition.X
-				dy := ev.BlockPosition.Y - lastBlockPosition.Y
-				dz := ev.BlockPosition.Z - lastBlockPosition.Z
-				dist := dx*dx + dy*dy + dz*dz // Square distance for performance
-				
-				if dist > maxBlockDistance*maxBlockDistance {
-					// Blocks too far apart - suspicious, reduce score
-					blockCount = int(float64(blockCount) * 0.7)
-					break
-				}
+			if lastTimestamp >= 0 && (ev.Timestamp-lastTimestamp) < 50 {
+				// Events too close together - suspicious
+				return 0
 			}
-			lastBlockPosition = ev.BlockPosition
-		}
-
-		// Validate block index progression
-		if ev.BlockIndex < 0 {
-			// Invalid block index - suspicious
-			blockCount = int(float64(blockCount) * 0.8)
-			break
+			lastTimestamp = ev.Timestamp
 		}
 	}
 
-	// Validate game duration
-	if req.GameDuration < minGameDuration || req.GameDuration > maxGameDuration {
-		// Suspicious game duration - reduce score
-		blockCount = int(float64(blockCount) * 0.6)
-	}
-
-	// Validate actual duration matches claimed duration
-	if len(sortedEvents) > 1 {
-		actualDuration := sortedEvents[len(sortedEvents)-1].Timestamp - sortedEvents[0].Timestamp
-		durationDiff := actualDuration - req.GameDuration
-		if durationDiff < 0 {
-			durationDiff = -durationDiff
-		}
-		if durationDiff > 5000 { // Allow 5 second tolerance
-			// Duration mismatch - suspicious, reduce score
-			blockCount = int(float64(blockCount) * 0.5)
-		}
-	}
-
-	// Validate block rate
-	if len(sortedEvents) > 1 {
-		actualDuration := sortedEvents[len(sortedEvents)-1].Timestamp - sortedEvents[0].Timestamp
-		if actualDuration > 0 {
-			blocksPerSecond := float64(blockCount) / (float64(actualDuration) / 1000.0)
-			if blocksPerSecond > maxBlocksPerSecond {
-				// Block rate too high - suspicious, reduce score
-				blockCount = int(float64(blockCount) * 0.4)
-			}
-		}
-	}
-
-	// Validate final block count consistency
-	if blockCount != req.FinalBlockCount {
-		// Count mismatch - suspicious, use the lower value
-		if req.FinalBlockCount < blockCount {
-			blockCount = req.FinalBlockCount
-		}
-		// Apply penalty for inconsistency
-		blockCount = int(float64(blockCount) * 0.9)
-	}
-
-	// Score = block count - 1 (first block is base)
-	score := blockCount - 1
+	// Original score calculation
+	score := req.FinalBlockCount - 1
 	if score < 0 {
 		return 0
 	}
@@ -169,6 +86,7 @@ func computeScore(req GameStateReq) int {
 // ===== Exported Functions (HTTP Handlers) =====
 
 // getAll → Returns the full leaderboard as JSON
+//
 //export getAll
 func getAll(e event.Event) uint32 {
 	// Parse HTTP request
@@ -218,6 +136,7 @@ func getAll(e event.Event) uint32 {
 }
 
 // get → Returns one player's score (via query param `player_name`)
+//
 //export get
 func get(e event.Event) uint32 {
 	// Parse HTTP request
@@ -251,6 +170,7 @@ func get(e event.Event) uint32 {
 }
 
 // set → Submits/updates a player's score if higher than existing
+//
 //export set
 func set(e event.Event) uint32 {
 	// Parse HTTP request
