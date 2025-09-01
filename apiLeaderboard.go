@@ -2,7 +2,6 @@ package lib
 
 import (
 	"encoding/json"
-
 	"sort"
 	"strconv"
 	"strings"
@@ -51,6 +50,42 @@ type GameStateReq struct {
 
 // Compute score from the player's final block count
 func computeScore(req GameStateReq) int {
+	// Anti-cheat: validate timestamps are in order
+	if len(req.GameEvents) > 0 {
+		var lastTimestamp int64 = -1
+		for _, ev := range req.GameEvents {
+			if lastTimestamp >= 0 && ev.Timestamp <= lastTimestamp {
+				return 0 // Suspicious: timestamps not in order
+			}
+			if lastTimestamp >= 0 && (ev.Timestamp-lastTimestamp) < 50 {
+				return 0 // Suspicious: events too close together
+			}
+			lastTimestamp = ev.Timestamp
+		}
+
+		// Anti-cheat: validate block count matches events
+		blockCount := 0
+		for _, ev := range req.GameEvents {
+			if ev.EventType == "block_placed" {
+				blockCount++
+			}
+		}
+		if blockCount != req.FinalBlockCount {
+			return 0 // Suspicious: block count mismatch
+		}
+
+		// Anti-cheat: validate timestamps against game duration
+		if req.GameDuration > 0 && len(req.GameEvents) > 1 {
+			firstTimestamp := req.GameEvents[0].Timestamp
+			lastTimestamp := req.GameEvents[len(req.GameEvents)-1].Timestamp
+			actualDuration := lastTimestamp - firstTimestamp
+
+			if actualDuration > req.GameDuration {
+				return 0 // Suspicious: actual duration longer than claimed
+			}
+		}
+	}
+
 	score := req.FinalBlockCount - 1
 	if score < 0 {
 		return 0
@@ -110,7 +145,7 @@ func getAll(e event.Event) uint32 {
 	return 0
 }
 
-// get → Returns one player's score (via query param `player_name`)
+// get → Returns one player’s score (via query param `player_name`)
 //
 //export get
 func get(e event.Event) uint32 {
@@ -144,7 +179,7 @@ func get(e event.Event) uint32 {
 	return 0
 }
 
-// set → Submits/updates a player's score if higher than existing
+// set → Submits/updates a player’s score if higher than existing
 //
 //export set
 func set(e event.Event) uint32 {
