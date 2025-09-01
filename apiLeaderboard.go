@@ -51,31 +51,6 @@ type GameStateReq struct {
 
 // Compute score from the player's final block count
 func computeScore(req GameStateReq) int {
-	// Simple timestamp verification anti-cheat
-	if len(req.GameEvents) > 0 {
-		// Sort events by timestamp
-		sortedEvents := make([]GameEvent, len(req.GameEvents))
-		copy(sortedEvents, req.GameEvents)
-		sort.Slice(sortedEvents, func(i, j int) bool {
-			return sortedEvents[i].Timestamp < sortedEvents[j].Timestamp
-		})
-
-		// Check if timestamps are in order and reasonable
-		var lastTimestamp int64 = -1
-		for _, ev := range sortedEvents {
-			if lastTimestamp >= 0 && ev.Timestamp <= lastTimestamp {
-				// Timestamps not in order - suspicious
-				return 0
-			}
-			if lastTimestamp >= 0 && (ev.Timestamp-lastTimestamp) < 50 {
-				// Events too close together - suspicious
-				return 0
-			}
-			lastTimestamp = ev.Timestamp
-		}
-	}
-
-	// Original score calculation
 	score := req.FinalBlockCount - 1
 	if score < 0 {
 		return 0
