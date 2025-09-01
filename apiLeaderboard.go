@@ -60,6 +60,28 @@ func computeScore(req GameStateReq) int {
 			}
 			lastTimestamp = ev.Timestamp
 		}
+
+		// Simple anti-cheat: check if block count roughly matches events
+		blockCount := 0
+		for _, ev := range req.GameEvents {
+			if ev.EventType == "block_placed" {
+				blockCount++
+			}
+		}
+		if blockCount < req.FinalBlockCount-2 || blockCount > req.FinalBlockCount+2 {
+			return 0 // Suspicious: block count mismatch (allow 2 block tolerance)
+		}
+
+		// Simple anti-cheat: check if game duration is reasonable
+		if req.GameDuration > 0 && len(req.GameEvents) > 1 {
+			firstTimestamp := req.GameEvents[0].Timestamp
+			lastTimestamp := req.GameEvents[len(req.GameEvents)-1].Timestamp
+			actualDuration := lastTimestamp - firstTimestamp
+
+			if actualDuration > req.GameDuration*3 {
+				return 0 // Suspicious: actual duration much longer than claimed (allow 3x tolerance)
+			}
+		}
 	}
 
 	score := req.FinalBlockCount - 1
