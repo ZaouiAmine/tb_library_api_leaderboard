@@ -147,53 +147,117 @@ func get(e event.Event) uint32 {
 }
 
 
+// computeScoreFromEvents securely recomputes score
+func computeScoreFromEvents(req GameStateReq) (int, error) {
+    if len(req.GameEvents) == 0 {
+        return 0, fmt.Errorf("no game events provided")
+    }
+
+    blockCount := 0
+    lastTimestamp := req.GameEvents[0].Timestamp
+    firstTimestamp := lastTimestamp
+    maxBlocksPerSec := 5 // configurable
+
+    for i, ev := range req.GameEvents {
+        // 1. Timestamps must increase
+        if ev.Timestamp < lastTimestamp {
+            return 0, fmt.Errorf("invalid event order at index %d", i)
+        }
+        elapsed := ev.Timestamp - lastTimestamp
+        if elapsed < 0 {
+            return 0, fmt.Errorf("negative time gap at index %d", i)
+        }
+        lastTimestamp = ev.Timestamp
+
+        // 2. Handle events
+        switch strings.ToLower(ev.EventType) {
+        case "block_placed":
+            blockCount++
+        case "block_removed":
+            if blockCount > 0 {
+                blockCount--
+            }
+        default:
+            // ignore unknown events
+        }
+    }
+
+    // 3. Validate duration
+    actualDuration := lastTimestamp - firstTimestamp
+    if req.GameDuration > 0 && actualDuration > req.GameDuration+2000 {
+        // Allow small tolerance (~2s)
+        return 0, fmt.Errorf("duration mismatch")
+    }
+
+    // 4. Validate growth rate
+    if actualDuration > 0 {
+        blocksPerSec := float64(blockCount) / (float64(actualDuration) / 1000.0)
+        if blocksPerSec > float64(maxBlocksPerSec) {
+            return 0, fmt.Errorf("impossible block rate")
+        }
+    }
+
+    // 5. Apply original scoring rule
+    score := blockCount - 1
+    if score < 0 {
+        score = 0
+    }
+
+    return score, nil
+}
+
+
 // set → Submits/updates a player’s score if higher than existing
 //export set
 func set(e event.Event) uint32 {
-	// Parse HTTP request
-	h, err := e.HTTP()
-	if err != nil {
-		return 1
-	}
+    // Parse HTTP request
+    h, err := e.HTTP()
+    if err != nil {
+        return 1
+    }
 
-	// Open leaderboard database
-	db, err := database.New("/leaderboard")
-	if err != nil {
-		return fail(h, err, 500)
-	}
+    // Open leaderboard database
+    db, err := database.New("/leaderboard")
+    if err != nil {
+        return fail(h, err, 500)
+    }
 
-	// Decode request body JSON into GameStateReq
-	var req GameStateReq
-	dec := json.NewDecoder(h.Body())
-	defer h.Body().Close()
-	if err = dec.Decode(&req); err != nil {
-		return fail(h, err, 400)
-	}
+    // Decode request body JSON into GameStateReq
+    var req GameStateReq
+    dec := json.NewDecoder(h.Body())
+    defer h.Body().Close()
+    if err = dec.Decode(&req); err != nil {
+        return fail(h, err, 400)
+    }
 
-	// Validate input
-	if req.PlayerName == "" {
-		return fail(h, err, 400)
-	}
+    // Validate input
+    if req.PlayerName == "" {
+        return fail(h, fmt.Errorf("missing player_name"), 400)
+    }
 
-	// Compute new score
-	newScore := computeScore(req)
+    // Compute new score from secure event replay
+    newScore, err := computeScoreFromEvents(req)
+    if err != nil {
+        return fail(h, err, 400)
+    }
 
-	// Check existing best score for player
-	existingBest := 0
-	if b, err := db.Get(req.PlayerName); err == nil && len(b) > 0 {
-		if v, convErr := strconv.Atoi(string(b)); convErr == nil {
-			existingBest = v
-		}
-	}
+    // Check existing best score for player
+    existingBest := 0
+    if b, err := db.Get(req.PlayerName); err == nil && len(b) > 0 {
+        if v, convErr := strconv.Atoi(string(b)); convErr == nil {
+            existingBest = v
+        }
+    }
 
-	// Only update if new score is higher
-	if newScore > existingBest {
-		if err = db.Put(req.PlayerName, []byte(strconv.Itoa(newScore))); err != nil {
-			return fail(h, err, 500)
-		}
-	}
+    // Only update if new score is higher
+    if newScore > existingBest {
+        if err = db.Put(req.PlayerName, []byte(strconv.Itoa(newScore))); err != nil {
+            return fail(h, err, 500)
+        }
+    }
 
-	// Respond success
-	h.Return(200)
-	return 0
+    // Respond success
+    h.Return(200)
+    return 0
+}
 }
