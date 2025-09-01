@@ -3,7 +3,6 @@ package lib
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,41 +47,18 @@ type GameStateReq struct {
 	FinalBlockCount int         `json:"final_block_count"`
 }
 
-// ===== Anti-Cheat Utility Functions =====
+// ===== Utility Functions =====
 
-// Helper for absolute value of float64
-func absFloat64(x float64) float64 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
-// Helper for absolute value of int64
-func absInt64(x int64) int64 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
-// Calculate distance between two 3D points
-func distance(p1, p2 Vec3) float64 {
-	dx := p1.X - p2.X
-	dy := p1.Y - p2.Y
-	dz := p1.Z - p2.Z
-	return math.Sqrt(dx*dx + dy*dy + dz*dz)
-}
-
-// Validate game events for anti-cheat
-func validateGameEvents(events []GameEvent, gameDuration int64, finalBlockCount int) error {
-	if len(events) == 0 {
-		return fmt.Errorf("no game events provided")
+// Compute score from the player's final block count
+func computeScore(req GameStateReq) int {
+	// Anti-cheat validation using timestamps and event analysis
+	if len(req.GameEvents) == 0 {
+		return 0 // No events = no score
 	}
 
 	// Sort events by timestamp to ensure chronological order
-	sortedEvents := make([]GameEvent, len(events))
-	copy(sortedEvents, events)
+	sortedEvents := make([]GameEvent, len(req.GameEvents))
+	copy(sortedEvents, req.GameEvents)
 	sort.Slice(sortedEvents, func(i, j int) bool {
 		return sortedEvents[i].Timestamp < sortedEvents[j].Timestamp
 	})
@@ -91,91 +67,99 @@ func validateGameEvents(events []GameEvent, gameDuration int64, finalBlockCount 
 	blockCount := 0
 	var lastBlockPosition Vec3
 
-	// Constants for anti-cheat validation
+	// Anti-cheat constants
 	const (
 		maxBlocksPerSecond = 3.0           // Maximum blocks per second
-		maxBlockDistance   = 10.0          // Maximum distance between blocks
+		maxBlockDistance   = 15.0          // Maximum distance between blocks
 		minTimeBetweenEvents = 50          // Minimum 50ms between events
 		maxGameDuration    = 3600000       // Maximum 1 hour game duration
 		minGameDuration    = 1000          // Minimum 1 second game duration
 	)
 
 	for i, ev := range sortedEvents {
-		// 1. Validate timestamp progression
+		// Validate timestamp progression
 		if lastTimestamp >= 0 {
 			timeDiff := ev.Timestamp - lastTimestamp
 			if timeDiff < minTimeBetweenEvents {
-				return fmt.Errorf("events too close together: %dms between events", timeDiff)
+				// Events too close together - suspicious, reduce score
+				blockCount = int(float64(blockCount) * 0.5)
+				break
 			}
 		}
 		lastTimestamp = ev.Timestamp
 
-		// 2. Validate event type
-		if ev.EventType == "" {
-			return fmt.Errorf("empty event type at index %d", i)
-		}
-
-		// 3. Count block placement events
-		if strings.ToLower(ev.EventType) == "block_placed" {
+		// Count block placement events
+		if ev.EventType == "block_placed" {
 			blockCount++
 			
-			// 4. Validate block positions (if not first block)
+			// Validate block positions (if not first block)
 			if blockCount > 1 {
-				dist := distance(ev.BlockPosition, lastBlockPosition)
-				if dist > maxBlockDistance {
-					return fmt.Errorf("block distance too large: %.2f units", dist)
+				// Calculate 3D distance between blocks
+				dx := ev.BlockPosition.X - lastBlockPosition.X
+				dy := ev.BlockPosition.Y - lastBlockPosition.Y
+				dz := ev.BlockPosition.Z - lastBlockPosition.Z
+				dist := dx*dx + dy*dy + dz*dz // Square distance for performance
+				
+				if dist > maxBlockDistance*maxBlockDistance {
+					// Blocks too far apart - suspicious, reduce score
+					blockCount = int(float64(blockCount) * 0.7)
+					break
 				}
 			}
 			lastBlockPosition = ev.BlockPosition
 		}
 
-		// 5. Validate block index progression
+		// Validate block index progression
 		if ev.BlockIndex < 0 {
-			return fmt.Errorf("negative block index: %d", ev.BlockIndex)
+			// Invalid block index - suspicious
+			blockCount = int(float64(blockCount) * 0.8)
+			break
 		}
 	}
 
-	// 6. Validate game duration
-	if gameDuration < minGameDuration {
-		return fmt.Errorf("game duration too short: %dms", gameDuration)
-	}
-	if gameDuration > maxGameDuration {
-		return fmt.Errorf("game duration too long: %dms", gameDuration)
+	// Validate game duration
+	if req.GameDuration < minGameDuration || req.GameDuration > maxGameDuration {
+		// Suspicious game duration - reduce score
+		blockCount = int(float64(blockCount) * 0.6)
 	}
 
-	// 7. Validate actual duration matches claimed duration
+	// Validate actual duration matches claimed duration
 	if len(sortedEvents) > 1 {
 		actualDuration := sortedEvents[len(sortedEvents)-1].Timestamp - sortedEvents[0].Timestamp
-		durationDiff := absInt64(actualDuration - gameDuration)
+		durationDiff := actualDuration - req.GameDuration
+		if durationDiff < 0 {
+			durationDiff = -durationDiff
+		}
 		if durationDiff > 5000 { // Allow 5 second tolerance
-			return fmt.Errorf("duration mismatch: claimed %dms, actual %dms", gameDuration, actualDuration)
+			// Duration mismatch - suspicious, reduce score
+			blockCount = int(float64(blockCount) * 0.5)
 		}
 	}
 
-	// 8. Validate block rate
+	// Validate block rate
 	if len(sortedEvents) > 1 {
 		actualDuration := sortedEvents[len(sortedEvents)-1].Timestamp - sortedEvents[0].Timestamp
 		if actualDuration > 0 {
 			blocksPerSecond := float64(blockCount) / (float64(actualDuration) / 1000.0)
 			if blocksPerSecond > maxBlocksPerSecond {
-				return fmt.Errorf("block rate too high: %.2f blocks/second", blocksPerSecond)
+				// Block rate too high - suspicious, reduce score
+				blockCount = int(float64(blockCount) * 0.4)
 			}
 		}
 	}
 
-	// 9. Validate final block count matches actual block placement events
-	if blockCount != finalBlockCount {
-		return fmt.Errorf("final block count mismatch: expected %d, got %d", finalBlockCount, blockCount)
+	// Validate final block count consistency
+	if blockCount != req.FinalBlockCount {
+		// Count mismatch - suspicious, use the lower value
+		if req.FinalBlockCount < blockCount {
+			blockCount = req.FinalBlockCount
+		}
+		// Apply penalty for inconsistency
+		blockCount = int(float64(blockCount) * 0.9)
 	}
 
-	return nil
-}
-
-// ===== Utility Functions =====
-
-// Compute score from the player's final block count
-func computeScore(req GameStateReq) int {
-	score := req.FinalBlockCount - 1
+	// Score = block count - 1 (first block is base)
+	score := blockCount - 1
 	if score < 0 {
 		return 0
 	}
@@ -245,7 +229,7 @@ func get(e event.Event) uint32 {
 	// Extract player_name from query string
 	key, err := h.Query().Get("player_name")
 	if err != nil {
-		return fail(h, fmt.Errorf("missing player_name parameter"), 400)
+		return fail(h, err, 400)
 	}
 
 	// Open leaderboard database
@@ -266,7 +250,7 @@ func get(e event.Event) uint32 {
 	return 0
 }
 
-// set → Submits/updates a player's score with anti-cheat validation
+// set → Submits/updates a player's score if higher than existing
 //export set
 func set(e event.Event) uint32 {
 	// Parse HTTP request
@@ -286,20 +270,15 @@ func set(e event.Event) uint32 {
 	dec := json.NewDecoder(h.Body())
 	defer h.Body().Close()
 	if err = dec.Decode(&req); err != nil {
-		return fail(h, fmt.Errorf("invalid JSON format: %v", err), 400)
+		return fail(h, err, 400)
 	}
 
-	// Basic input validation
-	if strings.TrimSpace(req.PlayerName) == "" {
-		return fail(h, fmt.Errorf("missing or empty player_name"), 400)
+	// Validate input
+	if req.PlayerName == "" {
+		return fail(h, err, 400)
 	}
 
-	// Anti-cheat validation
-	if err := validateGameEvents(req.GameEvents, req.GameDuration, req.FinalBlockCount); err != nil {
-		return fail(h, fmt.Errorf("anti-cheat validation failed: %v", err), 400)
-	}
-
-	// Compute new score based on validated events
+	// Compute new score
 	newScore := computeScore(req)
 
 	// Check existing best score for player
@@ -313,27 +292,11 @@ func set(e event.Event) uint32 {
 	// Only update if new score is higher
 	if newScore > existingBest {
 		if err = db.Put(req.PlayerName, []byte(strconv.Itoa(newScore))); err != nil {
-			return fail(h, fmt.Errorf("failed to save score: %v", err), 500)
+			return fail(h, err, 500)
 		}
 	}
 
-	// Respond with success and validation info
-	response := map[string]interface{}{
-		"player_name":    req.PlayerName,
-		"score":          newScore,
-		"previous_best":  existingBest,
-		"updated":        newScore > existingBest,
-		"events_validated": len(req.GameEvents),
-		"validation_passed": true,
-	}
-
-	jsonResponse, err := json.Marshal(response)
-	if err != nil {
-		return fail(h, err, 500)
-	}
-
-	h.Headers().Set("Content-Type", "application/json")
-	h.Write(jsonResponse)
+	// Respond success
 	h.Return(200)
 	return 0
 }
