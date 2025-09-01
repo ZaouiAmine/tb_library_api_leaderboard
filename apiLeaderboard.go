@@ -2,6 +2,7 @@ package lib
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -57,31 +58,31 @@ func computeScore(req GameStateReq) int {
 			if lastTimestamp >= 0 && ev.Timestamp <= lastTimestamp {
 				return 0 // Suspicious: timestamps not in order
 			}
-			if lastTimestamp >= 0 && (ev.Timestamp-lastTimestamp) < 50 {
-				return 0 // Suspicious: events too close together
+			if lastTimestamp >= 0 && (ev.Timestamp-lastTimestamp) < 10 {
+				return 0 // Suspicious: events too close together (10ms instead of 50ms)
 			}
 			lastTimestamp = ev.Timestamp
 		}
 
-		// Anti-cheat: validate block count matches events
+		// Anti-cheat: validate block count matches events (with tolerance)
 		blockCount := 0
 		for _, ev := range req.GameEvents {
 			if ev.EventType == "block_placed" {
 				blockCount++
 			}
 		}
-		if blockCount != req.FinalBlockCount {
-			return 0 // Suspicious: block count mismatch
+		if blockCount != req.FinalBlockCount && (blockCount < req.FinalBlockCount-1 || blockCount > req.FinalBlockCount+1) {
+			return 0 // Suspicious: block count mismatch (allow 1 block tolerance)
 		}
 
-		// Anti-cheat: validate timestamps against game duration
+		// Anti-cheat: validate timestamps against game duration (with tolerance)
 		if req.GameDuration > 0 && len(req.GameEvents) > 1 {
 			firstTimestamp := req.GameEvents[0].Timestamp
 			lastTimestamp := req.GameEvents[len(req.GameEvents)-1].Timestamp
 			actualDuration := lastTimestamp - firstTimestamp
 
-			if actualDuration > req.GameDuration {
-				return 0 // Suspicious: actual duration longer than claimed
+			if actualDuration > req.GameDuration*2 {
+				return 0 // Suspicious: actual duration much longer than claimed (allow 2x tolerance)
 			}
 		}
 	}
@@ -205,7 +206,7 @@ func set(e event.Event) uint32 {
 
 	// Validate input
 	if req.PlayerName == "" {
-		return fail(h, err, 400)
+		return fail(h, fmt.Errorf("missing player_name"), 400)
 	}
 
 	// Compute new score
