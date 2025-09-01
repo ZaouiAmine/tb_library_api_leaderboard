@@ -71,18 +71,6 @@ func computeScore(req GameStateReq) int {
 		if blockCount < req.FinalBlockCount-5 || blockCount > req.FinalBlockCount+5 {
 			return 0 // Suspicious: block count mismatch (allow 5 block tolerance)
 		}
-
-		// Simple anti-cheat: check if game duration is reasonable (very lenient)
-		if req.GameDuration > 0 && len(req.GameEvents) > 1 {
-			firstTimestamp := req.GameEvents[0].Timestamp
-			lastTimestamp := req.GameEvents[len(req.GameEvents)-1].Timestamp
-			actualDuration := lastTimestamp - firstTimestamp
-
-			// Allow actual duration to be shorter or up to 5x longer than claimed
-			if actualDuration < req.GameDuration/10 || actualDuration > req.GameDuration*5 {
-				return 0 // Suspicious: duration mismatch (allow 10% to 5x tolerance)
-			}
-		}
 	}
 
 	score := req.FinalBlockCount - 1
