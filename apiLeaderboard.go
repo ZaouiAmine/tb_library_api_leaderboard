@@ -78,8 +78,9 @@ func computeScore(req GameStateReq) int {
 			lastTimestamp := req.GameEvents[len(req.GameEvents)-1].Timestamp
 			actualDuration := lastTimestamp - firstTimestamp
 
-			if actualDuration > req.GameDuration*5 {
-				return 0 // Suspicious: actual duration much longer than claimed (allow 5x tolerance)
+			// Allow actual duration to be shorter or up to 5x longer than claimed
+			if actualDuration < req.GameDuration/10 || actualDuration > req.GameDuration*5 {
+				return 0 // Suspicious: duration mismatch (allow 10% to 5x tolerance)
 			}
 		}
 	}
