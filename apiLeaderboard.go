@@ -50,6 +50,17 @@ type GameStateReq struct {
 
 // Compute score from the player's final block count
 func computeScore(req GameStateReq) int {
+	// Simple anti-cheat: check if timestamps are chronologically correct
+	if len(req.GameEvents) > 0 {
+		// Check if timestamps are in chronological order
+		var lastTimestamp int64 = -1
+		for _, ev := range req.GameEvents {
+			if lastTimestamp >= 0 && ev.Timestamp < lastTimestamp {
+				return 0 // Suspicious: timestamps going backwards
+			}
+			lastTimestamp = ev.Timestamp
+		}
+	}
 
 	score := req.FinalBlockCount - 1
 	if score < 0 {
