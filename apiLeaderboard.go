@@ -50,19 +50,6 @@ type GameStateReq struct {
 
 // Compute score from the player's final block count
 func computeScore(req GameStateReq) int {
-	// Simple anti-cheat: check if events exist and block count is reasonable
-	if len(req.GameEvents) > 0 {
-		// Simple anti-cheat: check if block count roughly matches events (very lenient)
-		blockCount := 0
-		for _, ev := range req.GameEvents {
-			if ev.EventType == "block_placed" {
-				blockCount++
-			}
-		}
-		if blockCount < req.FinalBlockCount-10 || blockCount > req.FinalBlockCount+10 {
-			return 0 // Suspicious: block count mismatch (allow 10 block tolerance)
-		}
-	}
 
 	score := req.FinalBlockCount - 1
 	if score < 0 {
